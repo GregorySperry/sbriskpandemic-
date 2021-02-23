@@ -1,0 +1,171 @@
+
+#initial sample size parameter
+#the final sample size will be slightly larger due to the percentages for rev dist not added to 100% due to rounding in the source data
+ss <- 100
+
+#setting seed
+set.seed(1337)
+
+
+#variable parameters
+p <- 0.2
+ins_loading_fee <- 1
+ins_loading_fee_report <- (ins_loading_fee-1)*100
+#fixed parameters
+ins_monthly_pandemic_chance <- 0.01/12
+
+
+#generation of annual business revenue data, percentages found in table 1
+sb_rev_less_100k <- rnorm(n=.20*ss, mean = 50000, sd = 20000)
+sb_rev_less_1mm <- rnorm(n=.51*ss, mean = 500000, sd = 200000)
+sb_rev_less_10mm <- rnorm(n=.26*ss, mean = 5000000, sd = 2000000)
+sb_rev_more_10mm <- rnorm(n=.04*ss, mean = 13000000, sd = 2000000)
+
+sb_rev <- c(sb_rev_less_100k, sb_rev_less_1mm, sb_rev_less_10mm, sb_rev_more_10mm)
+#adjusting sample size for the slight inflation that occurs  
+ss <- length(sb_rev)
+
+#generation of phased based revenue effects
+
+#loading package to create correlated variables 
+library(fabricatr)
+rho_value = 0.8
+sb_rev_ld_effect <- rnorm(n=ss, mean = -0.6, sd = .1)
+sb_rev_sd_effect <-correlate(given = sb_rev_ld_effect, rho = rho_value, rnorm, mean=-0.25, sd = .1)
+#generation of profit margin data
+sb_pm <- rnorm(n=ss, mean = 0.07, sd = 0.03)
+
+#generation of dataframe with aggerated data 
+sb_df <- data.frame(RevAn=sb_rev, RevEffectLD = sb_rev_ld_effect, RevEffectSD = sb_rev_sd_effect, PM = sb_pm )
+
+#monthly revenue data
+sb_df$RevMonthly <- sb_df$RevAn/12
+
+#pre pandemic expenses
+sb_df$ExpMonthly <- -sb_df$PM*sb_df$RevMonthly+sb_df$RevMonthly
+
+#pre pandemic profit
+sb_df$ProfitMonthly <- sb_df$RevMonthly-sb_df$Exp
+
+#generation of phased based expense effects
+sb_lockdown_phase_exp <- rnorm(n=ss, mean=-.6, sd=.1)
+sb_df$ExpEffectLD <- sb_lockdown_phase_exp 
+
+#
+sb_socialdist_phase_exp <- correlate(given = sb_lockdown_phase_exp, rho = rho_value, rnorm, mean=-.2, sd = .1)
+sb_df$ExpEffectSD <- sb_socialdist_phase_exp
+
+#lock down revenue 
+sb_df$RevMonthlyLD <- 0
+#looping over the rows to calculate the monthly post pandemic revenue, the sign of the $RevEffectLD column indicates if the firm is a gaining or losing type
+#in either case, simply adding the value found from multiplying the monthly revenue by the percent change yields the adjusted revenue
+for (i in 1:dim(sb_df)[1]) {
+    sb_df$RevMonthlyLD[i] <- sb_df$RevMonthly[i]+(sb_df$RevMonthly[i]*sb_df$RevEffectLD[i])
+}
+
+#lockdown expenses
+for (i in 1:dim(sb_df)[1]) {
+  sb_df$ExpMonthlyLD[i] <- sb_df$ExpMonthly[i]+(sb_df$ExpEffectLD[i]*sb_df$ExpEffectLD[i])
+}
+
+#lockdown profit
+sb_df$ProfitMonthlyLD <- sb_df$RevMonthlyLD-sb_df$ExpMonthlyLD
+
+
+
+#social distancing revenue 
+sb_df$RevMonthlySD <- 0
+for (i in 1:dim(sb_df)[1]) {
+  sb_df$RevMonthlySD[i] <- sb_df$RevMonthly[i]+(sb_df$RevMonthly[i]*sb_df$RevEffectSD[i])
+}
+
+#social distancing expenses
+for (i in 1:dim(sb_df)[1]) {
+  sb_df$ExpMonthlySD[i] <- sb_df$ExpMonthly[i]+(sb_df$ExpEffectSD[i]*sb_df$ExpEffectSD[i])
+}
+
+#total lost/gained revenue
+
+sb_df$RevEffectTotal <- -1*((sb_df$RevMonthly*21)-((sb_df$RevMonthlyLD*3)+(sb_df$RevMonthlySD*18)))
+sb_df$RevEffectMonthly <- sb_df$RevEffectTotal/21
+
+#lockdown profit 
+sb_df$ProfitMonthlyLD <- sb_df$RevMonthlyLD-sb_df$ExpMonthlyLD
+
+#social distancing profit
+sb_df$ProfitMonthlySD <- sb_df$RevMonthlySD-sb_df$ExpMonthlySD
+
+#total profit
+sb_df$ProfitEffectTotal <- -1*((sb_df$ProfitMonthly*21)-((sb_df$ProfitMonthlyLD*3)+(sb_df$ProfitMonthlySD*18)))
+sb_df$ProfitEffectMonthly <- sb_df$ProfitEffectTotal/21
+#building insurance company dataframe
+
+
+ins_payout_total <- -1*sb_df$RevEffectTotal
+ins_df <- data.frame(PayoutTotal = ins_payout_total)
+ins_df$PayoutTotal <- ins_df$PayoutTotal
+
+
+ins_df$MonthlyPayout <- ins_df$PayoutTotal/21
+
+ins_df$MonthlyPremiums <- (ins_df$MonthlyPayout*ins_monthly_pandemic_chance)*ins_loading_fee
+
+
+
+#building dataframe of effect of having/not having insurance in the pandemic and not having pandemic cases 
+effects_df <- data.frame(ProfitablityNoPandemicYesInsurance = sb_df$ProfitMonthly-ins_df$MonthlyPremiums)
+effects_df$ProfitablityYesPandemicYesInsurance <- sb_df$ProfitMonthly+sb_df$ProfitEffectMonthly+ins_df$MonthlyPayout
+effects_df$ProfitablityNoPandemicNoInsurance <- sb_df$ProfitMonthly
+effects_df$ProfitablityYesPandemicNoInsurance <-sb_df$ProfitMonthly+sb_df$ProfitEffectMonthly
+#applying CRRA utility
+
+#p refers to the coefficient of relative risk aversion
+crra_utility <- function(x) {
+  1/(1-p)*sign(x)*abs(x)^(1-p)
+}
+
+
+utility_df <- crra_utility(effects_df)
+
+
+#weighting utilites for probablity 
+utility_df$InsuranceYes <- (utility_df$ProfitablityNoPandemicYesInsurance*((1-ins_monthly_pandemic_chance))+(utility_df)$ProfitablityYesPandemicYesInsurance*(ins_monthly_pandemic_chance))
+utility_df$InsuranceNo <- (utility_df$ProfitablityNoPandemicNoInsurance*(1-ins_monthly_pandemic_chance))+(utility_df$ProfitablityYesPandemicNoInsurance*(ins_monthly_pandemic_chance))
+utility_df$InsuranceDiff <- utility_df$InsuranceYes-utility_df$InsuranceNo
+
+
+#assigning a 1 if the firm will buy insurance and a 0 if it will not 
+ins_df$InsuranceBuy[utility_df$InsuranceDiff > 0.01] <- 1
+ins_df$InsuranceBuy[utility_df$InsuranceDiff <= 0.01] <- 0
+firms_buy <- sum(ins_df$InsuranceBuy==1)
+
+
+ins_df <- subset(ins_df, subset=(InsuranceBuy==1))
+ins_payout_total <- sum(ins_df$PayoutTotal)
+ins_prem <- sum(ins_df$MonthlyPremiums)
+ins_years_break_even <- (ins_payout_total/ins_prem)/(21*12)
+ins_expected_return <- 0
+
+pandemic_sim <- function(){
+pandemic <- rbinom(100, 1, 0.01)
+index <- match(1, pandemic)
+index[is.na(index)] <- 0
+
+if (index > 0) {
+  ins_expected_return <- (index*12*21*ins_prem)-ins_payout_total
+} else {
+  ins_expected_return <- 100*12*21*ins_prem
+}
+return(ins_expected_return)
+}
+runs <- 100000
+ins_final_returns <- (replicate(runs,pandemic_sim()))
+ins_profitable <- (sum(ins_final_returns >= 0)/runs)*100
+
+output <- function() {
+  cat(firms_buy, "firms", "out of", ss, "will buy insurance assuming their owners’ max utility under CRRA", "with risk aversion factor of", p, "and insurance loading fee of", ins_loading_fee_report, "%" )
+  cat("\n")
+  cat("The insurance company must collect premiums for", ins_years_break_even, "years without a pandemic occurring to at least break even. ")
+  cat("This will occur", ins_profitable, "% of the time.")
+}
+output()
