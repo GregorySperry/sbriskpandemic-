@@ -4,7 +4,7 @@
 ss <- 100
 
 #setting seed
-set.seed(1337)
+set.seed(1332)
 
 #generation of annual business revenue data, percentages found in table 1
 sb_rev_less_100k <- rnorm(n=.20*ss, mean = 50000, sd = 20000)
